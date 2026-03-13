@@ -443,7 +443,7 @@ DNS-балансировка с гео-ориентацией:
 # 5. Логическая схема БД
 
 
-![[https://github.com/art-raz/Highload2026/blob/e66bc920a2f643de2e8d962d1426aff7acaf60ce/diagram%20(7).png]]
+!(diagram)[diagram (7).png]]
 
 
 |  Номер   | Источник                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
