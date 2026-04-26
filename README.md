@@ -530,7 +530,7 @@ N_net = ceil(9 760 Гбит/с / 2.93 Гбит/с) = ceil(3 331) = 3 331
 | `reposts`           | PostgreSQL (Citus)           | **Dual**: `HASH(user_id)` и `HASH(original_tweet_id)` | 1 primary + 2 replicas |
 | `tweet_counters`    | PostgreSQL (Citus)           | `HASH(tweet_id)`, 64 шарда                            | 1 primary + 2 replicas |
 | `user_avatars`      | S3 (MinIO) + CDN             | Object storage                                        | Erasure coding 8+4     |
-| `recommendations    | Redis Cluster                | `HASH(user_id)`, 32 мастера                           | 1 master + 1 replica   |
+| `recommendations`   | Redis Cluster                | `HASH(user_id)`, 32 мастера                           | 1 master + 1 replica   |
 | `author_embeddings` | Qdrant                       | `user_id`, HNSW индекс                                | 1 primary + 2 replicas |
 
 
