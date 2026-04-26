@@ -517,21 +517,22 @@ N_net = ceil(9 760 Гбит/с / 2.93 Гбит/с) = ceil(3 331) = 3 331
 
 #### Выбор СУБД по таблицам
 
-| Таблица                    | СУБД                         | Ключ шардирования                                     | Резервирование         |
-| -------------------------- | ---------------------------- | ----------------------------------------------------- | ---------------------- |
-| `media_types_postgres`     | PostgreSQL (Citus reference) | Reference table                                       | RF = 2                 |
-| `users_postgres`           | PostgreSQL (Citus)           | `HASH(user_id)`, 32 шарда                             | 1 primary + 2 replicas |
-| `sessions_redis`           | Redis Cluster                | `HASH(user_id)`, 16 мастеров                          | 1 master + 1 replica   |
-| `follows_postgres`         | PostgreSQL (Citus)           | `HASH(follower_id)`, 32 шарда                         | 1 primary + 2 replicas |
-| `blocks_postgres`          | PostgreSQL (Citus)           | `HASH(blocker_id)`, 32 шарда                          | 1 primary + 2 replicas |
-| `tweets_postgres`          | PostgreSQL (Citus)           | `HASH(tweet_id)`, 64 шарда                            | 1 primary + 2 replicas |
-| `tweet_media_postgres`     | PostgreSQL (Citus)           | `HASH(tweet_id)`, 64 шарда                            | 1 primary + 2 replicas |
-| `likes_postgres`           | PostgreSQL (Citus)           | **Dual**: `HASH(user_id)` и `HASH(tweet_id)`          | 1 primary + 2 replicas |
-| `reposts_postgres`         | PostgreSQL (Citus)           | **Dual**: `HASH(user_id)` и `HASH(original_tweet_id)` | 1 primary + 2 replicas |
-| `tweet_counters_postgres`  | PostgreSQL (Citus)           | `HASH(tweet_id)`, 64 шарда                            | 1 primary + 2 replicas |
-| `user_avatars_s3`          | S3 (MinIO) + CDN             | Object storage                                        | Erasure coding 8+4     |
-| `recommendations_redis`    | Redis Cluster                | `HASH(user_id)`, 32 мастера                           | 1 master + 1 replica   |
-| `author_embeddings_qdrant` | Qdrant                       | `user_id`, HNSW индекс                                | 1 primary + 2 replicas |
+| Таблица             | СУБД                         | Ключ шардирования                                     | Резервирование         |
+| ------------------- | ---------------------------- | ----------------------------------------------------- | ---------------------- |
+| `media_types`       | PostgreSQL (Citus reference) | Reference table                                       | RF = 2                 |
+| `users`             | PostgreSQL (Citus)           | `HASH(user_id)`, 32 шарда                             | 1 primary + 2 replicas |
+| `sessions`          | Redis Cluster                | `HASH(user_id)`, 16 мастеров                          | 1 master + 1 replica   |
+| `follows`           | PostgreSQL (Citus)           | `HASH(follower_id)`, 32 шарда                         | 1 primary + 2 replicas |
+| `blocks`            | PostgreSQL (Citus)           | `HASH(blocker_id)`, 32 шарда                          | 1 primary + 2 replicas |
+| `tweets`            | PostgreSQL (Citus)           | `HASH(tweet_id)`, 64 шарда                            | 1 primary + 2 replicas |
+| `tweet_media`       | PostgreSQL (Citus)           | `HASH(tweet_id)`, 64 шарда                            | 1 primary + 2 replicas |
+| `likes`             | PostgreSQL (Citus)           | **Dual**: `HASH(user_id)` и `HASH(tweet_id)`          | 1 primary + 2 replicas |
+| `reposts`           | PostgreSQL (Citus)           | **Dual**: `HASH(user_id)` и `HASH(original_tweet_id)` | 1 primary + 2 replicas |
+| `tweet_counters`    | PostgreSQL (Citus)           | `HASH(tweet_id)`, 64 шарда                            | 1 primary + 2 replicas |
+| `user_avatars`      | S3 (MinIO) + CDN             | Object storage                                        | Erasure coding 8+4     |
+| `recommendations    | Redis Cluster                | `HASH(user_id)`, 32 мастера                           | 1 master + 1 replica   |
+| `author_embeddings` | Qdrant                       | `user_id`, HNSW индекс                                | 1 primary + 2 replicas |
+
 
 ##### Обоснование выбора СУБД
 
