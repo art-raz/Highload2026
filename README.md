@@ -508,23 +508,25 @@ N_net = ceil(488 / 5.87) = ceil(83.1) = 84
 
 #### Выбор СУБД по таблицам
 
-| Таблица             | СУБД                         | Ключ шардирования                                     | Резервирование         |
-| ------------------- | ---------------------------- | ----------------------------------------------------- | ---------------------- |
-| `media_types`       | PostgreSQL (Citus reference) | Reference table                                       | RF = 2                 |
-| `users`             | PostgreSQL (Citus)           | `HASH(user_id)`, 32 шарда                             | 1 primary + 2 replicas |
-| `sessions`          | Redis Cluster                | `HASH(user_id)`, 16 мастеров                          | 1 master + 1 replica   |
-| `follows`           | PostgreSQL (Citus)           | `HASH(follower_id)`, 32 шарда                         | 1 primary + 2 replicas |
-| `blocks`            | PostgreSQL (Citus)           | `HASH(blocker_id)`, 32 шарда                          | 1 primary + 2 replicas |
-| `tweets`            | PostgreSQL (Citus)           | `HASH(tweet_id)`, 64 шарда                            | 1 primary + 2 replicas |
-| `tweet_media`       | PostgreSQL (Citus)           | `HASH(tweet_id)`, 64 шарда                            | 1 primary + 2 replicas |
-| `likes`             | PostgreSQL (Citus)           | **Dual**: `HASH(user_id)` и `HASH(tweet_id)`          | 1 primary + 2 replicas |
-| `reposts`           | PostgreSQL (Citus)           | **Dual**: `HASH(user_id)` и `HASH(original_tweet_id)` | 1 primary + 2 replicas |
-| `tweet_counters`    | PostgreSQL (Citus)           | `HASH(tweet_id)`, 64 шарда                            | 1 primary + 2 replicas |
-| `user_avatars`      | S3 (MinIO) + CDN             | Object storage                                        | Erasure coding 8+4     |
-| `recommendations`   | Redis Cluster                | `HASH(user_id)`, 32 мастера                           | 1 master + 1 replica   |
-| `author_embeddings` | Qdrant                       | `user_id`, HNSW индекс                                | 1 primary + 2 replicas |
-
-
+| Таблица                     | СУБД               | Ключ шардирования / расположение                     | Резервирование         |
+| --------------------------- | ------------------ | ---------------------------------------------------- | ---------------------- |
+| `media_types`               | PostgreSQL (Citus) | Reference table                                      | RF = 2                 |
+| `users`                     | PostgreSQL (Citus) | `HASH(user_id)`, 32 шарда                            | 1 primary + 2 replicas |
+| `sessions`                  | Redis Cluster      | `KEY = session:{id}`, автоматическое по CRC16        | 1 master + 1 replica   |
+| `follows`                   | PostgreSQL (Citus) | `HASH(follower_id)`, 32 шарда                        | 1 primary + 2 replicas |
+| `blocks`                    | PostgreSQL (Citus) | `HASH(blocker_id)`, 32 шарда                         | 1 primary + 2 replicas |
+| `tweets`                    | PostgreSQL (Citus) | `HASH(tweet_id)`, 64 шарда                           | 1 primary + 2 replicas |
+| `tweet_media` (метаданные)  | PostgreSQL (Citus) | `HASH(tweet_id)`, колоцирована с `tweets`            | 1 primary + 2 replicas |
+| `tweet_media_s3` (файлы)    | S3 (MinIO) + CDN   | Object key = `{tweet_id}/{media_id}`                 | Erasure coding 8+4     |
+| `likes` (user-копия)        | PostgreSQL (Citus) | `HASH(user_id)`, 32 шарда                            | 1 primary + 2 replicas |
+| `likes` (tweet-копия)       | PostgreSQL (Citus) | `HASH(tweet_id)`, 64 шарда                           | 1 primary + 2 replicas |
+| `reposts` (user-копия)      | PostgreSQL (Citus) | `HASH(user_id)`, 32 шарда                            | 1 primary + 2 replicas |
+| `reposts` (tweet-копия)     | PostgreSQL (Citus) | `HASH(original_tweet_id)`, 64 шарда                  | 1 primary + 2 replicas |
+| `tweet_counters`            | PostgreSQL (Citus) | `HASH(tweet_id)`, колоцирована с `tweets`            | 1 primary + 2 replicas |
+| `user_avatars` (метаданные) | PostgreSQL (Citus) | `HASH(user_id)`, колоцирована с `users`              | 1 primary + 2 replicas |
+| `user_avatars_s3` (файлы)   | S3 (MinIO) + CDN   | Object key = `avatars/{user_id}`                     | Erasure coding 8+4     |
+| `recommendations`           | Redis Cluster      | `KEY = recommendations:{user_id}`, Sorted Set        | 1 master + 1 replica   |
+| `author_embeddings`         | Qdrant             | Collection `author_embeddings`, шардинг по `user_id` | 1 primary + 2 replicas |
 ##### Обоснование выбора СУБД
 
 | Хранилище          | Назначение                             | Причины                                                                                                                                                                                                                                                                                                   |
@@ -532,7 +534,7 @@ N_net = ceil(488 / 5.87) = ceil(83.1) = 84
 | PostgreSQL + Citus | Пользователи, твиты, подписки, лайки   | MySQL - хуже с шардированием. MongoDB/Cassandra - нет связей между таблицами и транзакций<br>Почему Citus, а не обычный PostgreSQL: обычный PostgreSQL не умеет сам раскладывать данные по разным серверам - упирается в мощность одной машины. Citus добавляет эту возможность, работая как единая база. |
 | Redis              | Сессии, кэш лент, рекомендации         | Memcached - не сохраняет данные на диск, нет сортированных списков                                                                                                                                                                                                                                        |
 | Qdrant             | Вектора пользователей для рекомендаций | pgvector (расширение PostgreSQL) - медленнее на миллионах векторов                                                                                                                                                                                                                                        |
-| S3 + CDN           | Аватарки пользователей                 | PostgreSQL - раздувает БД и замедляет бэкапы. Файловый сервер - единая точка отказа                                                                                                                                                                                                                       |
+| S3 (MinIO) + CDN   | медиа                                  | высокая эффективность хранения                                                                                                                                                                                                                                                                            |
 
 #### Индексы
 
@@ -560,6 +562,8 @@ N_net = ceil(488 / 5.87) = ceil(83.1) = 84
 | Redis (session + recommendations) | RDB + AOF           | RDB каждые 15 мин | 7 дней    |
 | Qdrant                            | Snapshot в S3       | ежечасный         | 7 дней    |
 | S3                                | Versioning          | непрерывно        | 30 дней   |
+
+---
 
 # 7. Алгоритмы
 
