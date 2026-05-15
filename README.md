@@ -661,3 +661,56 @@ N_net = ceil(488 / 5.87) = ceil(83.1) = 84
 # 10 Схема проекта
 
 ![db](img/diagram.png)
+
+# 11. Список серверов
+
+## Требования к ресурсам
+
+| Сервис | Нагрузка | CPU | RAM | Диск | Сеть | Краткий расчёт |
+|--------|----------|-----|-----|------|------|----------------|
+| L7 Ingress (NGINX) | 41 962 TLS handshakes/с пик | 112 vCPU | 224 ГБ | 1.0 ТБ SSD | 10 Гбит/с | 98 vCPU треб. / 16 vCPU на ноду = 7 нод + 1 резерв |
+| Backend API (Go) | 209 809 RPS пик | 200 vCPU | 400 ГБ | 2.0 ТБ SSD | 10 Гбит/с | ~2 000 RPS/vCPU, 100 vCPU треб., 10 нод × 20 vCPU |
+| Kafka | 6 843 msg/s пик | 24 vCPU | 48 ГБ | 3.0 ТБ SSD | 5 Гбит/с | 3 брокера, RF=3, retention 3 дня |
+| PostgreSQL user-cluster | 23 468 LPS чтение | 64 vCPU | 256 ГБ | 6.0 ТБ NVMe | 3 Гбит/с | 32 шарда, 1 primary + 2 replicas на 8 физических нод |
+| PostgreSQL tweet-cluster | 310 450 LPS чтение | 256 vCPU | 1 024 ГБ | 24.0 ТБ NVMe | 10 Гбит/с | 64 шарда, 1 primary + 2 replicas на 16 физических нод |
+| Redis session | 1 734 RPS | 32 vCPU | 64 ГБ | 1.0 ТБ SSD | 2 Гбит/с | 16 мастеров + 16 реплик |
+| Redis recommendation | 161 500 RPS | 64 vCPU | 128 ГБ | 2.0 ТБ SSD | 3 Гбит/с | 32 мастера + 32 реплики |
+| Qdrant | 50 000 поисков/с | 32 vCPU | 128 ГБ | 2.0 ТБ NVMe | 2 Гбит/с | 1 primary + 2 replicas |
+| MinIO | 9.76 Тбит/с пик | 96 vCPU | 384 ГБ | 140 ТБ HDD | 40 Гбит/с | 12 нод, erasure coding 8+4 |
+| **Итого** | - | **880 vCPU** | **2 656 ГБ** | **181 ТБ** | - | - |
+
+## Серверы
+
+| Сервис / пул | Тип | Конфигурация | Кол-во |
+|--------------|-----|--------------|--------|
+| L7 Ingress | Cloud VM | 16 vCPU / 32 ГБ / 200 ГБ SSD | 8 |
+| Backend API | Cloud VM | 20 vCPU / 40 ГБ / 200 ГБ SSD | 10 |
+| Kafka | Cloud VM | 8 vCPU / 16 ГБ / 1 ТБ SSD | 3 |
+| PostgreSQL user-cluster | Bare Metal | 8 cores / 32 ГБ / 2×1 ТБ NVMe | 8 |
+| PostgreSQL tweet-cluster | Bare Metal | 16 cores / 64 ГБ / 2×2 ТБ NVMe | 16 |
+| Redis session | Cloud VM | 4 vCPU / 8 ГБ / 100 ГБ SSD | 32 |
+| Redis recommendation | Cloud VM | 8 vCPU / 16 ГБ / 100 ГБ SSD | 64 |
+| Qdrant | Bare Metal | 16 cores / 64 ГБ / 2×1 ТБ NVMe | 3 |
+| MinIO | Bare Metal | 8 cores / 32 ГБ / 8×4 ТБ HDD | 12 |
+| **Итого** | - | - | **156** |
+
+## Kubernetes / контейнеры
+
+| Сервис | Поды | CPU req / lim | RAM req / lim | Размещение |
+|--------|------|---------------|---------------|-------------|
+| ingress-nginx | 8 | 4 / 8 | 4 / 8 ГБ | L7 pool |
+| api-gateway | 11 | 2 / 6 | 1 / 2 ГБ | backend pool |
+| tweet-service | 20 | 2 / 4 | 2 / 4 ГБ | backend pool |
+| interaction-service | 15 | 2 / 4 | 2 / 4 ГБ | backend pool |
+| media-service | 5 | 1 / 2 | 1 / 2 ГБ | backend pool |
+| timeline-service | 13 | 2 / 4 | 2 / 4 ГБ | backend pool |
+| recommendation-service | 10 | 2 / 4 | 2 / 4 ГБ | backend pool |
+| **Итого** | **82** | **170 / 356 vCPU** | **168 / 332 ГБ** | - |
+
+## Суммарная аллокация по пулам Kubernetes
+
+| Пул | Ноды | Ресурсы пула | Сумма requests | Сумма limits | Запас по requests |
+|-----|------|--------------|----------------|--------------|-------------------|
+| L7 pool | 8 | 128 vCPU / 256 ГБ RAM | 32 vCPU / 32 ГБ | 64 vCPU / 64 ГБ | 96 vCPU / 224 ГБ |
+| Backend pool | 10 | 200 vCPU / 400 ГБ RAM | 138 vCPU / 136 ГБ | 292 vCPU / 268 ГБ | 62 vCPU / 264 ГБ |
+| **Итого** | **18** | **328 vCPU / 656 ГБ RAM** | **170 vCPU / 168 ГБ** | **356 vCPU / 332 ГБ** | **158 vCPU / 488 ГБ** |
