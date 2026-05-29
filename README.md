@@ -758,23 +758,23 @@ flowchart TB
 
     %% БАЛАНСИРОВКА
     L4["L4 Балансировщик"]
-    subgraph L7["NGINX Ingress × 22+1"]
+    subgraph L7["NGINX Ingress"]
         direction LR
         NG1["A"] & NG2["B"] & NG3["…"]
     end
 
     %% GATEWAY
-    GW["API Gateway × 11"]
+    GW["API Gateway"]
 
     %% СЕРВИСЫ
     subgraph K8S["Kubernetes"]
         direction LR
-        AUTH["AuthService\n× 3"]
-        TWEET["TweetService\n× 20"]
-        INTER["InteractionService\n× 15"]
-        MEDIA["MediaService\n× 5"]
-        TL["TimelineService\n× 13"]
-        REC["RecommendationService\n× 10"]
+        AUTH["AuthService"]
+        TWEET["TweetService"]
+        INTER["InteractionService"]
+        MEDIA["MediaService"]
+        TL["TimelineService"]
+        REC["RecommendationService"]
     end
 
     %% KAFKA
@@ -800,7 +800,7 @@ flowchart TB
 
     subgraph REDIS["Redis Cluster"]
         direction LR
-        RD_S[("sessions\n16m+16r")] & RD_R[("recommendations\nSorted Set\n32m+32r")]
+        RD_S[("sessions")] & RD_R[("recommendations\nSorted Set")]
     end
 
     QD[("Qdrant\nauthor_embeddings")]
