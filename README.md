@@ -852,55 +852,53 @@ flowchart TB
     KT3 --> SC_TV
 ```
 
-# 11. Список серверов
+---
 
-## Требования к ресурсам
+# 11 Расчет ресурсов
 
-| Сервис | Нагрузка | CPU | RAM | Диск | Сеть | Краткий расчёт |
-|--------|----------|-----|-----|------|------|----------------|
-| L7 Ingress (NGINX) | 41 962 TLS handshakes/с пик | 112 vCPU | 224 ГБ | 1.0 ТБ SSD | 10 Гбит/с | 98 vCPU треб. / 16 vCPU на ноду = 7 нод + 1 резерв |
-| Backend API (Go) | 209 809 RPS пик | 200 vCPU | 400 ГБ | 2.0 ТБ SSD | 10 Гбит/с | ~2 000 RPS/vCPU, 100 vCPU треб., 10 нод × 20 vCPU |
-| Kafka | 6 843 msg/s пик | 24 vCPU | 48 ГБ | 3.0 ТБ SSD | 5 Гбит/с | 3 брокера, RF=3, retention 3 дня |
-| PostgreSQL user-cluster | 23 468 LPS чтение | 64 vCPU | 256 ГБ | 6.0 ТБ NVMe | 3 Гбит/с | 32 шарда, 1 primary + 2 replicas на 8 физических нод |
-| PostgreSQL tweet-cluster | 310 450 LPS чтение | 256 vCPU | 1 024 ГБ | 24.0 ТБ NVMe | 10 Гбит/с | 64 шарда, 1 primary + 2 replicas на 16 физических нод |
-| Redis session | 1 734 RPS | 32 vCPU | 64 ГБ | 1.0 ТБ SSD | 2 Гбит/с | 16 мастеров + 16 реплик |
-| Redis recommendation | 161 500 RPS | 64 vCPU | 128 ГБ | 2.0 ТБ SSD | 3 Гбит/с | 32 мастера + 32 реплики |
-| Qdrant | 50 000 поисков/с | 32 vCPU | 128 ГБ | 2.0 ТБ NVMe | 2 Гбит/с | 1 primary + 2 replicas |
-| MinIO | 9.76 Тбит/с пик | 96 vCPU | 384 ГБ | 140 ТБ HDD | 40 Гбит/с | 12 нод, erasure coding 8+4 |
-| **Итого** | - | **880 vCPU** | **2 656 ГБ** | **181 ТБ** | - | - |
+[Подробно Расчет ресурсов](./11_Calculating_resources.md)
 
-## Серверы
+### Потребность в ресурсах
 
-| Сервис / пул | Тип | Конфигурация | Кол-во |
-|--------------|-----|--------------|--------|
-| L7 Ingress | Cloud VM | 16 vCPU / 32 ГБ / 200 ГБ SSD | 8 |
-| Backend API | Cloud VM | 20 vCPU / 40 ГБ / 200 ГБ SSD | 10 |
-| Kafka | Cloud VM | 8 vCPU / 16 ГБ / 1 ТБ SSD | 3 |
-| PostgreSQL user-cluster | Bare Metal | 8 cores / 32 ГБ / 2×1 ТБ NVMe | 8 |
-| PostgreSQL tweet-cluster | Bare Metal | 16 cores / 64 ГБ / 2×2 ТБ NVMe | 16 |
-| Redis session | Cloud VM | 4 vCPU / 8 ГБ / 100 ГБ SSD | 32 |
-| Redis recommendation | Cloud VM | 8 vCPU / 16 ГБ / 100 ГБ SSD | 64 |
-| Qdrant | Bare Metal | 16 cores / 64 ГБ / 2×1 ТБ NVMe | 3 |
-| MinIO | Bare Metal | 8 cores / 32 ГБ / 8×4 ТБ HDD | 12 |
-| **Итого** | - | - | **156** |
+| Сервис                | Пиковая нагрузка          | CPU (ядра) | RAM       | Диск          | Модель         |
+| --------------------- | ------------------------- | ---------- | --------- | ------------- | -------------- |
+| NGINX Ingress         | 643 489 RPS / 128 698 CPS | 352        | 736 ГБ    | 0.5 ТБ SSD    | Cloud VM       |
+| Backend (Go)          | 791 059 RPS суммарно      | 1 728      | 3 456 ГБ  | 3 ТБ SSD      | Bare-metal K8s |
+| Kafka                 | 705 738 msg/s             | 48         | 192 ГБ    | 48 ТБ NVMe    | Cloud VM       |
+| PostgreSQL + Citus    | ~1 938 эфф. RPS           | 96         | 384 ГБ    | 24 ТБ NVMe    | Bare-metal     |
+| ScyllaDB              | 1 162 500 ops/s пик       | 1 728      | 6 912 ГБ  | 864 ТБ NVMe   | Bare-metal     |
+| Redis sessions        | 791 059 RPS               | 24         | 192 ГБ    | 0.2 ТБ SSD    | Cloud VM       |
+| Redis recommendations | 826 667 RPS               | 32         | 2 048 ГБ  | 0.4 ТБ SSD    | Cloud VM       |
+| Qdrant                | 12 917 RPS                | 48         | 384 ГБ    | 6 ТБ NVMe     | Bare-metal     |
+| MinIO S3              | 187 Гбит/с (после CDN)    | 4 104      | 10 944 ГБ | 43 776 ТБ HDD | Bare-metal     |
 
-## Kubernetes / контейнеры
+### Физические серверы
 
-| Сервис | Поды | CPU req / lim | RAM req / lim | Размещение |
-|--------|------|---------------|---------------|-------------|
-| ingress-nginx | 8 | 4 / 8 | 4 / 8 ГБ | L7 pool |
-| api-gateway | 11 | 2 / 6 | 1 / 2 ГБ | backend pool |
-| tweet-service | 20 | 2 / 4 | 2 / 4 ГБ | backend pool |
-| interaction-service | 15 | 2 / 4 | 2 / 4 ГБ | backend pool |
-| media-service | 5 | 1 / 2 | 1 / 2 ГБ | backend pool |
-| timeline-service | 13 | 2 / 4 | 2 / 4 ГБ | backend pool |
-| recommendation-service | 10 | 2 / 4 | 2 / 4 ГБ | backend pool |
-| **Итого** | **82** | **170 / 356 vCPU** | **168 / 332 ГБ** | - |
+|Пул|Хостинг|Конфигурация|Ядер/нода|Нод|
+|---|---|---|---|---|
+|NGINX Ingress|Cloud VM|16 vCPU / 32 ГБ / 25 ГБ SSD / 10 Гбит/с|16|23 (22+1)|
+|Kafka|Cloud VM|8 vCPU / 32 ГБ / 2×4 ТБ NVMe / 10 Гбит/с|8|6|
+|Redis sessions|Cloud VM|8 vCPU / 32 ГБ / 50 ГБ SSD / 1 Гбит/с|8|6|
+|Redis recommendations|Cloud VM|16 vCPU / 256 ГБ / 100 ГБ SSD / 10 Гбит/с|16|8|
+|PostgreSQL + Citus|Bare-metal|16 cores / 64 ГБ / 2×2 ТБ NVMe / 10 Гбит/с|16|6|
+|ScyllaDB|Bare-metal|32 cores / 128 ГБ / 4×4 ТБ NVMe / 25 Гбит/с|32|54|
+|Backend K8s nodes|Bare-metal|32 cores / 64 ГБ / 2×1 ТБ NVMe / 25 Гбит/с|32|54|
+|Qdrant|Bare-metal|16 cores / 128 ГБ / 2×1 ТБ NVMe / 10 Гбит/с|16|3|
+|MinIO S3|Bare-metal|12 cores / 32 ГБ / 8×16 ТБ HDD / 2×10 Гбит/с|12|342|
+|Итого||||502|
 
-## Суммарная аллокация по пулам Kubernetes
+### Kubernetes - поды и ресурсы
 
-| Пул | Ноды | Ресурсы пула | Сумма requests | Сумма limits | Запас по requests |
-|-----|------|--------------|----------------|--------------|-------------------|
-| L7 pool | 8 | 128 vCPU / 256 ГБ RAM | 32 vCPU / 32 ГБ | 64 vCPU / 64 ГБ | 96 vCPU / 224 ГБ |
-| Backend pool | 10 | 200 vCPU / 400 ГБ RAM | 138 vCPU / 136 ГБ | 292 vCPU / 268 ГБ | 62 vCPU / 264 ГБ |
-| **Итого** | **18** | **328 vCPU / 656 ГБ RAM** | **170 vCPU / 168 ГБ** | **356 vCPU / 332 ГБ** | **158 vCPU / 488 ГБ** |
+Поды размещаются на 54 bare-metal backend K8s нодах (54 × 32 = 1 728 ядер, 54 × 64 = 3 456 ГБ RAM).
+
+|Сервис|Поды|CPU req / lim|RAM req / lim|
+|---|---|---|---|
+|ingress-nginx|23|14 / 16|8 / 16 ГБ|
+|api-gateway|15|4 / 8|1 / 2 ГБ|
+|auth-service|6|8 / 16|1 / 2 ГБ|
+|tweet-service|6|4 / 8|1 / 2 ГБ|
+|interaction-service|30|4 / 8|1 / 2 ГБ|
+|media-service|3|2 / 4|1 / 2 ГБ|
+|timeline-service|54|24 / 32|4 / 8 ГБ|
+|recommendation-service|15|4 / 8|2 / 4 ГБ|
+|Итого|152|~1 560 / ~1 728 vCPU|~670 / ~1 344 ГБ|
