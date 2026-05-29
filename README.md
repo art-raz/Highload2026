@@ -583,77 +583,248 @@ flowchart TD
 
 # 6. Физическая схема баз данных
 
-#### Физические проекции данных
+### Физические проекции данных
 
-Для X (Twitter) данные разделены на две физические проекции:
+Данные разделены на две физические проекции по ключу доступа:
 
-| Проекция          | Ключ физического доступа | Какие сценарии обслуживает                          | Основная идея                         |
-| ----------------- | ------------------------ | --------------------------------------------------- | ------------------------------------- |
-| **Tweet-centric** | `tweet_id`               | Выдача твитов, лайки/ретвиты, счётчики, медиа, просмотры | Все данные одного твита лежат рядом   |
-| **User-centric**  | `user_id`                | Профиль, подписки, блокировки, сессии, рекомендации | Все данные пользователя в одном месте |
+|Проекция|Ключ доступа|Сценарии|Идея|
+|---|---|---|---|
+|Tweet-centric|`tweet_id`|Выдача твитов, лайки, ретвиты, счётчики, просмотры|Все данные одного твита лежат на одних репликах|
+|User-centric|`user_id`|Профиль, подписки, блокировки, сессии, рекомендации|Все данные пользователя в одном месте|
 
-#### Физическая схема
+## PostgreSQL (Citus)
 
-(СУБД в названии таблиц)
+Хранит user-centric таблицы: профили, подписки, блокировки, справочник типов медиа. Нужны ACID-транзакции и уникальные ограничения (`username`, `email`). Нагрузка умеренная – профили, подписки и блокировки кешируются на уровне приложения.
 
-![6db](img/6.png)
+```mermaid
+erDiagram
+    users {
+        bigint user_id PK "SHARD KEY"
+        varchar username "UNIQUE"
+        varchar email "UNIQUE"
+        char password_hash
+        varchar display_name
+        varchar bio
+        timestamptz created_at
+        timestamptz last_online
+    }
 
-#### Выбор СУБД по таблицам
+    follows {
+        bigint follower_id PK "SHARD KEY"
+        bigint followee_id PK
+        timestamptz created_at
+    }
 
-| Таблица             | СУБД               | Ключ шардирования / расположение                     | Резервирование         |
-| ------------------- | ------------------ | ---------------------------------------------------- | ---------------------- |
-| `media_types`       | PostgreSQL (Citus) | Reference table                                      | RF = 2                 |
-| `users`             | PostgreSQL (Citus) | `HASH(user_id)`, 32 шарда                            | 1 primary + 2 replicas |
-| `sessions`          | Redis Cluster      | `KEY = session:{id}`, автоматическое по CRC16        | 1 master + 1 replica   |
-| `follows`           | PostgreSQL (Citus) | `HASH(follower_id)`, 32 шарда                        | 1 primary + 2 replicas |
-| `blocks`            | PostgreSQL (Citus) | `HASH(blocker_id)`, 32 шарда                         | 1 primary + 2 replicas |
-| `tweets`            | ScyllaDB           | `PARTITION BY (id)`, 64 шарда                        | RF = 3                 |
-| `tweet_views`       | ScyllaDB           | `PARTITION BY (user_id)`, 32 шарда                   | RF = 3                 |
-| `tweet_media`       | PostgreSQL (Citus) | `HASH(tweet_id)`, колоцирована с `tweets`            | 1 primary + 2 replicas |
-| `tweet_media_s3`    | S3 (MinIO) + CDN   | Object key = {tweet_id}/{media_id}                   | Erasure coding 8+4     |
-| `likes`             | ScyllaDB           | `PARTITION BY (tweet_id)`, 64 шарда                  | RF = 3                 |
-| `reposts`           | ScyllaDB           | `PARTITION BY (original_tweet_id)`, 64 шарда         | RF = 3                 |
-| `tweet_counters`    | ScyllaDB           | `PARTITION BY (tweet_id)`, колоцирована с `tweets`   | RF = 3                 |
-| `user_avatars`      | S3 (MinIO) + CDN   | Object key = `avatars/{user_id}`                     | Erasure coding 8+4     |
-| `recommendations`   | Redis Cluster      | `KEY = recommendations:{user_id}`, Sorted Set        | 1 master + 1 replica   |
-| `author_embeddings` | Qdrant             | Collection `author_embeddings`, шардинг по `user_id` | 1 primary + 2 replicas |
+    blocks {
+        bigint blocker_id PK "SHARD KEY"
+        bigint blocked_id PK
+        timestamptz created_at
+    }
 
-##### Обоснование выбора СУБД
+    media_types {
+        smallint type_id PK "REFERENCE TABLE"
+        varchar type_name
+    }
 
-| Хранилище          | Назначение                                                             | Причины                                                                    |
-| ------------------ | ------------------------------------------------------------------ | -------------------------------------------------------------------------- |
-| ScyllaDB       | Tweet-centric таблицы (твиты, лайки, репосты, просмотры, счетчики) | Высокая производительность на запись                                       |
-| PostgreSQL + Citus | Пользователи, подписки, блокировки, медиа-метаданные                   | Требуются связи между таблицами и транзакции. Citus добавляет шардирование |
-| Redis              | Сессии, кэш лент, рекомендации                                         | Memcached - не сохраняет данные на диск, нет сортированных списков         |
-| Qdrant             | Вектора пользователей для рекомендаций                                 | pgvector (расширение PostgreSQL) - медленнее на миллионах векторов         |
-| S3 (MinIO) + CDN   | медиа (аватары, изображения, видео)                                    | высокая эффективность хранения, CDN для глобальной доставки                |
+    users ||--o{ follows : "подписывается"
+    users ||--o{ blocks  : "блокирует"
+```
 
-#### Индексы
+Шардирование:
 
-| Таблица                 | Индекс                           | Поля                                   | Тип               |
-| ----------------------- | -------------------------------- | -------------------------------------- | ----------------- |
-| `users_postgres`        | `idx_users_username`             | `username`                             | UNIQUE            |
-| `users_postgres`        | `idx_users_email`                | `email`                                | UNIQUE            |
-| `users_postgres`        | `idx_users_last_online`          | `last_online DESC`                     | INDEX             |
-| `tweets_scylladb`       | `idx_tweets_author_created`      | `(author_id, created_at DESC)`         | MATERIALIZED VIEW |
-| `follows_postgres`      | `idx_follows_followee_created`   | `(followee_id, created_at DESC)`       | INDEX             |
-| `follows_postgres`      | `idx_follows_unique`             | `(follower_id, followee_id)`           | UNIQUE            |
-| `blocks_postgres`       | `idx_blocks_unique`              | `(blocker_id, blocked_id)`             | UNIQUE            |
-| `likes_scylladb`        | `idx_likes_tweet_created`        | `(tweet_id, created_at DESC)`          | MATERIALIZED VIEW |
-| `reposts_scylladb`      | `idx_reposts_original_created`   | `(original_tweet_id, created_at DESC)` | MATERIALIZED VIEW |
-| `tweet_views_scylladb`  | `idx_tweet_views_tweet_created`  | `(tweet_id, viewed_at DESC)`           | MATERIALIZED VIEW |
-| `tweet_media_postgres`  | `idx_tweet_media_order`          | `(tweet_id, order_index)`              | UNIQUE            |
-| `recommendations_redis` | `idx_recommendations_user_score` | `(user_id, score DESC)`                | SORTED SET        |
+- `users` – по `user_id`, 32 шарда
+- `follows` – по `follower_id`, 32 шарда; запрос "на кого я подписан" всегда в один шард
+- `blocks` – по `blocker_id`, 32 шарда
+- `media_types` – reference table, реплицируется на каждый воркер целиком
 
-#### Схема резервного копирования
+Консистентность `follows`: Eventual – появление новой подписки в ленте с небольшой задержкой допустимо. Консистентность `blocks`: Strong – заблокированный контент не должен появляться в ленте ни при каких условиях.
 
-| Компонент                         | Механизм                 | Расписание         | Retention  |
-| --------------------------------- | ------------------------ | ------------------ | ---------- |
-| ScyllaDB (tweet-centric)      | Snapshot + CommitLog | каждые 6 часов | 7 дней |
-| PostgreSQL (user-centric)         | WAL + pg_basebackup      | каждые 6 часов     | 7 дней     |
-| Redis (session + recommendations) | RDB + AOF                | RDB каждые 15 мин  | 7 дней     |
-| Qdrant                            | Snapshot в S3            | ежечасный          | 7 дней     |
-| S3                                | Versioning               | непрерывно         | 30 дней    |
+### ScyllaDB
+
+Хранит tweet-centric таблицы. Выбор обусловлен нагрузкой: `tweet_views` – 387 500 avg QPS на запись, `tweets` – 387 500 avg QPS на чтение, `likes` – 32 407 avg QPS на запись.
+
+Citus не может физически колоцировать свои таблицы с таблицами ScyllaDB. Чтобы метаданные медиа читались одним запросом вместе с твитом, обе таблицы должны быть в одной СУБД с одинаковым partition key.
+
+```mermaid
+erDiagram
+
+    tweets {
+        bigint tweet_id PK "PARTITION KEY"
+        bigint author_id
+        timestamp created_at
+        text text_content
+        bigint reply_to_id
+        bigint quote_id
+        text lang
+    }
+
+    tweets_by_author {
+        bigint author_id PK "PARTITION KEY"
+        timestamp created_at PK "CLUSTERING KEY DESC"
+        bigint tweet_id
+    }
+
+    tweet_media {
+        bigint tweet_id PK "PARTITION KEY"
+        smallint order_index PK "CLUSTERING KEY ASC"
+        bigint media_id
+        smallint media_type
+        text s3_key
+        int width
+        int height
+    }
+
+    tweet_counters {
+        bigint tweet_id PK "PARTITION KEY"
+        counter likes_count
+        counter reposts_count
+        counter replies_count
+        counter views_count
+    }
+
+    likes {
+        bigint tweet_id PK "PARTITION KEY"
+        smallint bucket PK "PARTITION KEY tweet_id mod 16"
+        timestamp created_at PK "CLUSTERING KEY DESC"
+        bigint user_id
+    }
+
+    reposts {
+        bigint original_tweet_id PK "PARTITION KEY"
+        smallint bucket PK "PARTITION KEY tweet_id mod 8"
+        timestamp created_at PK "CLUSTERING KEY DESC"
+        bigint user_id
+        bigint repost_tweet_id
+    }
+
+    tweet_views {
+        bigint user_id PK "PARTITION KEY"
+        date view_date PK "PARTITION KEY TTL 7 days"
+        bigint tweet_id PK "CLUSTERING KEY"
+        timestamp viewed_at
+    }
+
+    tweets ||--|| tweet_counters  : "1-to-1 по tweet_id"
+    tweets ||--o{ tweet_media     : "медиа твита"
+    tweets ||--o{ likes           : "лайки"
+    tweets ||--o{ reposts         : "репосты"
+    tweets ||--o{ tweet_views     : "просмотры"
+    tweets ||--o{ tweets_by_author : "проекция по автору"
+```
+
+Partition key и Clustering key:
+
+| Таблица            | Partition key                 | Clustering key    | Compaction         |
+| ------------------ | ----------------------------- | ----------------- | ------------------ |
+| `tweets`           | `tweet_id`                    | -                 | LCS                |
+| `tweets_by_author` | `author_id`                   | `created_at DESC` | TWCS (окно 1 день) |
+| `tweet_media`      | `tweet_id`                    | `order_index ASC` | LCS                |
+| `tweet_counters`   | `tweet_id`                    | -                 | LCS                |
+| `likes`            | `(tweet_id, bucket)`          | `created_at DESC` | TWCS (окно 6 ч)    |
+| `reposts`          | `(original_tweet_id, bucket)` | `created_at DESC` | TWCS (окно 6 ч)    |
+| `tweet_views`      | `(user_id, view_date)`        | `tweet_id`        | TWCS (окно 1 день) |
+
+Почему такие ключи:
+
+- `tweets_by_author` – отдельная таблица, а не MATERIALIZED VIEW: в ScyllaDB MV требует, чтобы все колонки базовой таблицы входили в PK новой, что здесь невыполнимо. Отдельная таблица с нужным PK – стандартная практика.
+- `likes` и `reposts` – составной partition key с бакетом: популярный твит собирает миллионы лайков, один `tweet_id` перегружает один узел. Бакет `tweet_id % 16` равномерно распределяет нагрузку по узлам. Общее число лайков берётся из `tweet_counters` (один запрос), а не агрегацией по бакетам.
+- `tweet_views` – `(user_id, view_date)` вместо просто `user_id`: без `view_date` партиция активного пользователя неограниченно растёт. С датой – максимум ~3 000 записей в партиции за день (150 показов × ~20 твитов). TTL 7 дней: старые просмотры удаляются автоматически, история дальше 7 дней для дедупликации ленты не нужна.
+- `tweet_counters` – тип `counter` ScyllaDB: атомарный инкремент без гонок. Обновляется Kafka-консьюмером батчами (`UPDATE ... SET likes_count = likes_count + N`), не триггерами в БД – в distributed-таблицах ScyllaDB триггеров уровня БД нет.
+- LCS (LeveledCompactionStrategy) – для таблиц с точечным чтением по известному ключу (`tweets`, `tweet_counters`, `tweet_media`): минимизирует read amplification.
+- TWCS (TimeWindowCompactionStrategy) – для таблиц, куда данные пишутся по времени и не обновляются (`likes`, `reposts`, `tweet_views`, `tweets_by_author`): группирует SSTables по временным окнам, эффективно удаляет TTL-данные целыми окнами.
+
+### Redis Cluster
+
+```mermaid
+erDiagram
+
+    sessions {
+        string key "session:{uuid}"
+        bigint user_id
+        timestamptz created_at
+        timestamptz expires_at
+        string device
+        string ip
+    }
+
+    recommendations {
+        string key "recommendations:{user_id}"
+        zset scored_tweets "tweet_id : score – Sorted Set"
+    }
+```
+
+- `sessions` – ключ `session:{uuid}`, TTL = срок жизни токена. Проверка авторизации на каждый запрос: ~527 373 avg RPS. Только Redis даёт нужные < 1 мс задержки.
+- `recommendations` – Sorted Set на пользователя, хранит до 200 предрасчитанных `tweet_id` с оценкой релевантности. Пересчёт батчем раз в 15 минут. Шардирование автоматическое по CRC16 от ключа (Redis Cluster), 32 мастера + 32 реплики.
+
+## Физическая схема – Qdrant
+
+```mermaid
+erDiagram
+
+    author_embeddings {
+        bigint user_id PK "SHARD KEY"
+        vector embedding "float32 x256"
+        timestamptz updated_at
+    }
+```
+
+- Коллекция `author_embeddings`, шардирование по `user_id`.
+- Вектор 256 измерений float32 = 1 КБ на запись.
+- Используется для ANN-поиска похожих пользователей при формировании рекомендаций.
+- Пересчёт раз в час батчем по всем активным пользователям.
+
+### S3 (MinIO) + CDN
+
+```mermaid
+erDiagram
+
+    tweet_media_s3 {
+        string object_key PK "{tweet_id}/{media_id}"
+        binary file_data "изображение / видео / GIF"
+    }
+
+    user_avatars_s3 {
+        string object_key PK "avatars/{user_id}"
+        binary file_data "изображение аватара"
+    }
+```
+
+- Erasure coding 8+4: данные переживают выход из строя до 4 нод одновременно.
+- CDN (CloudFront) кеширует медиа на edge-узлах – к MinIO доходит лишь cache miss. Аватары и популярные медиа практически всегда отдаются CDN без обращения к хранилищу.
+
+### Выбор СУБД
+
+|Хранилище|Таблицы|Ключевая причина|
+|---|---|---|
+|ScyllaDB|`tweets`, `tweets_by_author`, `tweet_media`, `likes`, `reposts`, `tweet_views`, `tweet_counters`|До 387 500 avg QPS на запись/чтение; горизонтальное масштабирование; тип `counter`; TWCS/LCS|
+|PostgreSQL + Citus|`users`, `follows`, `blocks`, `media_types`|ACID-транзакции, уникальные ограничения; умеренная нагрузка с кешированием|
+|Redis Cluster|`sessions`, `recommendations`|< 1 мс задержка; TTL; Sorted Set; ~527k RPS на сессии|
+|Qdrant|`author_embeddings`|ANN-поиск на 620 млн векторов; pgvector медленнее в этом масштабе|
+|S3 + CDN|`tweet_media_s3`, `user_avatars_s3`|Бинарные файлы; CDN снимает 99%+ нагрузки на чтение|
+
+### Индексы
+
+| Таблица                     | Поля                                                   | Тип               | Зачем                                          |
+| --------------------------- | ------------------------------------------------------ | ----------------- | ---------------------------------------------- |
+| `users` (PG)                | `username`                                             | UNIQUE INDEX      | Вход по логину                                 |
+| `users` (PG)                | `email`                                                | UNIQUE INDEX      | Вход по email                                  |
+| `follows` (PG)              | `(followee_id, created_at DESC)`                       | INDEX             | Кто подписан на автора – при fan-out твита     |
+| `blocks` (PG)               | `(blocker_id, blocked_id)`                             | UNIQUE INDEX      | Проверка блокировки                            |
+| `tweets_by_author` (Scylla) | `(author_id, created_at DESC)`                         | Отдельная таблица | Лента подписок – твиты конкретного автора      |
+| `likes` (Scylla)            | `created_at DESC` внутри `(tweet_id, bucket)`          | Clustering key    | Хронологический список лайков к твиту          |
+| `reposts` (Scylla)          | `created_at DESC` внутри `(original_tweet_id, bucket)` | Clustering key    | Хронологический список репостов                |
+| `tweet_views` (Scylla)      | `tweet_id` внутри `(user_id, view_date)`               | Clustering key    | Проверка "уже видел?" по `tweet_id`            |
+| `recommendations` (Redis)   | score                                                  | Sorted Set        | Лента "Для вас" отсортирована по релевантности |
+
+### Схема резервного копирования
+
+| Компонент                     | Механизм             | Расписание        | Retention |
+| ----------------------------- | -------------------- | ----------------- | --------- |
+| ScyllaDB (tweet-centric)      | Snapshot + CommitLog | каждые 6 часов    | 7 дней    |
+| PostgreSQL (user-centric)     | WAL + pg_basebackup  | каждые 6 часов    | 7 дней    |
+| Redis (сессии + рекомендации) | RDB + AOF            | RDB каждые 15 мин | 7 дней    |
+| Qdrant                        | Snapshot в S3        | ежечасно          | 7 дней    |
+| S3                            | Versioning           | непрерывно        | 30 дней   |
 
 ---
 
