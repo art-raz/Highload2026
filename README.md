@@ -800,7 +800,7 @@ erDiagram
 |PostgreSQL + Citus|`users`, `follows`, `blocks`, `media_types`|ACID-транзакции, уникальные ограничения; умеренная нагрузка с кешированием|
 |Redis Cluster|`sessions`, `recommendations`|< 1 мс задержка; TTL; Sorted Set; ~527k RPS на сессии|
 |Qdrant|`author_embeddings`|ANN-поиск на 620 млн векторов; pgvector медленнее в этом масштабе|
-|S3 + CDN|`tweet_media_s3`, `user_avatars_s3`|Бинарные файлы; CDN снимает 99%+ нагрузки на чтение|
+|S3 + CDN|`tweet_media_s3`, `user_avatars_s3`|Бинарные файлы; CDN снимает большую часть нагрузки на чтение|
 
 ### Индексы
 
@@ -813,7 +813,7 @@ erDiagram
 | `tweets_by_author` (Scylla) | `(author_id, created_at DESC)`                         | Отдельная таблица | Лента подписок – твиты конкретного автора      |
 | `likes` (Scylla)            | `created_at DESC` внутри `(tweet_id, bucket)`          | Clustering key    | Хронологический список лайков к твиту          |
 | `reposts` (Scylla)          | `created_at DESC` внутри `(original_tweet_id, bucket)` | Clustering key    | Хронологический список репостов                |
-| `tweet_views` (Scylla)      | `tweet_id` внутри `(user_id, view_date)`               | Clustering key    | Проверка "уже видел?" по `tweet_id`            |
+| `tweet_views` (Scylla)      | `tweet_id` внутри `(user_id, view_date)`               | Clustering key    | Проверка просмотра твита по `tweet_id`            |
 | `recommendations` (Redis)   | score                                                  | Sorted Set        | Лента "Для вас" отсортирована по релевантности |
 
 ### Схема резервного копирования
