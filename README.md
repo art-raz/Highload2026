@@ -652,7 +652,7 @@ erDiagram
         bigint tweet_id PK "PARTITION KEY"
         bigint author_id
         timestamp created_at
-        timestamp deleted_at "NULL = живой"
+        timestamp deleted_at
         text text_content
         bigint reply_to_id
         bigint quote_id
@@ -716,20 +716,31 @@ erDiagram
 
 Partition key и Clustering key:
 
-| Таблица            | Partition key                 | Clustering key    | Compaction         |
-| ------------------ | ----------------------------- | ----------------- | ------------------ |
-| `tweets`           | `tweet_id`                    | -                 | LCS                |
-| `tweets_by_author` | `author_id`                   | `created_at DESC` | LCS                |
-| `tweet_media`      | `tweet_id`                    | `order_index ASC` | LCS                |
-| `tweet_counters`   | `tweet_id`                    | -                 | LCS                |
-| `likes`            | `(tweet_id, bucket)`          | `created_at DESC` | TWCS (окно 6 ч)    |
-| `reposts`          | `(original_tweet_id, bucket)` | `created_at DESC` | TWCS (окно 6 ч)    |
-| `tweet_views`      | `(user_id, view_date)`        | `tweet_id`        | TWCS (окно 1 день) |
+| Таблица             | Partition key                                        | Clustering key     | Compaction          |
+| ------------------- | ---------------------------------------------------- | ------------------ | ------------------- |
+| `tweets`            | `tweet_id`                                           | -                  | LCS                 |
+| `tweets_by_author`  | `author_id`                                          | `created_at DESC`  | LCS                 |
+| `tweet_media`       | `tweet_id`                                           | `order_index ASC`  | LCS                 |
+| `tweet_counters`    | `tweet_id`                                           | -                  | LCS                 |
+| `likes`             | `(tweet_id, bucket)` bucket = tweet_id % 8           | `created_at DESC`  | TWCS (окно 6 ч)     |
+| `reposts`           | `(original_tweet_id, bucket)` bucket = tweet_id % 2  | `created_at DESC`  | TWCS (окно 6 ч)     |
+| `tweet_views`       | `(user_id, view_date)`                               | `tweet_id`         | TWCS (окно 1 день)  |
 
 Почему такие ключи:
 
 - `tweets_by_author` – отдельная таблица, а не MATERIALIZED VIEW: в ScyllaDB MV требует, чтобы все колонки базовой таблицы входили в PK новой, что здесь невыполнимо. Отдельная таблица с нужным PK – стандартная практика.
-- `likes` и `reposts` – составной partition key с бакетом: популярный твит собирает миллионы лайков, один `tweet_id` перегружает один узел. Бакет `tweet_id % 16` равномерно распределяет нагрузку по узлам. Общее число лайков берётся из `tweet_counters` (один запрос), а не агрегацией по бакетам.
+- `likes` и `reposts` - составной partition key с бакетом: популярный твит собирает миллионы лайков, один `tweet_id` перегружает один узел. Число бакетов выводится из пиковой нагрузки на один горячий твит. Допущение: в экстремальной ситуации (breaking news, вирусный скандал) 10% всего пикового трафика лайков приходится на один твит.
+
+```
+Пик лайков на горячий твит: 48 610 RPS × 0.10 = ~4 861 RPS
+Целевой лимит на одну партицию: ~1 000 RPS
+Бакетов: ceil(4 861 / 1 000) = 5 → ближайшая степень двойки = 8
+
+Пик репостов на горячий твит: 5 556 RPS × 0.10 = ~556 RPS
+Бакетов: ceil(556 / 1 000) = 1 → минимум = 2
+```
+
+Итого: `likes` `tweet_id % 8`, `reposts` `tweet_id % 2`. Степень двойки выбирается для равномерного распределения при хэшировании. Общее число лайков берётся из `tweet_counters` одним запросом, а не агрегацией по бакетам.
 - `tweet_views` – `(user_id, view_date)` вместо просто `user_id`: без `view_date` партиция активного пользователя неограниченно растёт. С датой – максимум ~3 000 записей в партиции за день (150 показов × ~20 твитов). TTL 7 дней: старые просмотры удаляются автоматически, история дальше 7 дней для дедупликации ленты не нужна.
 - `tweet_counters` – тип `counter` ScyllaDB: атомарный инкремент без гонок. Обновляется Kafka-консьюмером батчами (`UPDATE ... SET likes_count = likes_count + N`), не триггерами в БД – в distributed-таблицах ScyllaDB триггеров уровня БД нет.
 - LCS (LeveledCompactionStrategy) – для таблиц с точечным чтением по известному ключу (`tweets`, `tweet_counters`, `tweet_media`): минимизирует read amplification.
