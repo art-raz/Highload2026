@@ -652,6 +652,7 @@ erDiagram
         bigint tweet_id PK "PARTITION KEY"
         bigint author_id
         timestamp created_at
+        timestamp deleted_at "NULL = живой"
         text text_content
         bigint reply_to_id
         bigint quote_id
@@ -684,14 +685,14 @@ erDiagram
 
     likes {
         bigint tweet_id PK "PARTITION KEY"
-        smallint bucket PK "PARTITION KEY tweet_id mod 16"
+        smallint bucket PK "PARTITION KEY tweet_id mod 4"
         timestamp created_at PK "CLUSTERING KEY DESC"
         bigint user_id
     }
 
     reposts {
         bigint original_tweet_id PK "PARTITION KEY"
-        smallint bucket PK "PARTITION KEY tweet_id mod 8"
+        smallint bucket PK "PARTITION KEY tweet_id mod 2"
         timestamp created_at PK "CLUSTERING KEY DESC"
         bigint user_id
         bigint repost_tweet_id
@@ -711,13 +712,14 @@ erDiagram
     tweets ||--o{ tweet_views     : "просмотры"
     tweets ||--o{ tweets_by_author : "проекция по автору"
 ```
+Примечание: в таблице `tweets` поле `deleted_at` (NULL = живой, иначе удалён) работает по следующей логике: при удалении сервис пишет `deleted_at = now()` и выбрасывает событие `tweet.deleted` в Kafka. Консьюмер `TweetCleanupWorker` асинхронно удаляет связанные данные: `tweet_media`, `likes`, `reposts`, `tweet_counters`. `tweet_views` не требует ручной очистки, TTL удалит записи автоматически. При чтении ленты `TimelineService` фильтрует `deleted_at IS NOT NULL`, поэтому удалённый твит не попадает в выдачу. Т.е. soft delete с отложенной очисткой.
 
 Partition key и Clustering key:
 
 | Таблица            | Partition key                 | Clustering key    | Compaction         |
 | ------------------ | ----------------------------- | ----------------- | ------------------ |
 | `tweets`           | `tweet_id`                    | -                 | LCS                |
-| `tweets_by_author` | `author_id`                   | `created_at DESC` | TWCS (окно 1 день) |
+| `tweets_by_author` | `author_id`                   | `created_at DESC` | LCS                |
 | `tweet_media`      | `tweet_id`                    | `order_index ASC` | LCS                |
 | `tweet_counters`   | `tweet_id`                    | -                 | LCS                |
 | `likes`            | `(tweet_id, bucket)`          | `created_at DESC` | TWCS (окно 6 ч)    |
@@ -732,6 +734,7 @@ Partition key и Clustering key:
 - `tweet_counters` – тип `counter` ScyllaDB: атомарный инкремент без гонок. Обновляется Kafka-консьюмером батчами (`UPDATE ... SET likes_count = likes_count + N`), не триггерами в БД – в distributed-таблицах ScyllaDB триггеров уровня БД нет.
 - LCS (LeveledCompactionStrategy) – для таблиц с точечным чтением по известному ключу (`tweets`, `tweet_counters`, `tweet_media`): минимизирует read amplification.
 - TWCS (TimeWindowCompactionStrategy) – для таблиц, куда данные пишутся по времени и не обновляются (`likes`, `reposts`, `tweet_views`, `tweets_by_author`): группирует SSTables по временным окнам, эффективно удаляет TTL-данные целыми окнами.
+
 
 ### Redis Cluster
 
